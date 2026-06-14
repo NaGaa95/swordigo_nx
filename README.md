@@ -5,9 +5,8 @@ Nintendo Switch. It loads the original arm64 game binary, resolves its imports
 with native Switch libraries and runs it.
 
 Based on the original [Swordigo Vita](https://github.com/) port by TheFloW and
-Rinnegatamante, and the [max_nx](https://github.com/fgsfdsfgs/max_nx) AArch64
-Switch wrapper by fgsfds. See [PORT_NOTES.md](PORT_NOTES.md) for the technical
-details.
+Rinnegatamante, and [max_nx](https://github.com/fgsfdsfgs/max_nx) AArch64
+Switch wrapper by fgsfds.
 
 ## Install
 
@@ -27,7 +26,6 @@ Final layout:
 /switch/swordigo/libswordigo.so
 /switch/swordigo/assets/resources/...
 /switch/swordigo/res/*.mp3
-/switch/swordigo/config.txt        (created on first run)
 ```
 
 Launch via a **game override** (hold R on an installed title) or a forwarder
@@ -51,7 +49,7 @@ pacman -S switch-dev switch-mesa switch-libdrm_nouveau \
 - **Rinnegatamante** — Vita port, audio and JNI work.
 - **fgsfds** — `max_nx`, the Switch AArch64 wrapper framework.
 
-### Support
+## Support
 
 If you enjoy my work and want to support me :
 
