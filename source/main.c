@@ -193,6 +193,11 @@ static void emit_touch(int phase, int id, float x, float y) {
                    phase == TOUCH_BEGAN ? 1 : 0);
 }
 
+static void emit_touch_drag(int phase, int id, float x, float y, float ox, float oy) {
+  handleTouchEvent(fake_env, NULL, phase, id, g_time, x, y, ox, oy,
+                   phase == TOUCH_BEGAN ? 1 : 0);
+}
+
 // edge-triggered fake touch for a control: down->BEGAN, held->MOVED, up->ENDED
 static void drive_button(int held, int was_held, int id, float x, float y) {
   if (held)
@@ -229,6 +234,71 @@ static void update_input(void) {
   right_prev = right_now;
 
   pad_prev = down;
+}
+
+// ---------------------------------------------------------------------------
+
+#define TOUCH_PANEL_W 1280
+#define TOUCH_PANEL_H 720
+#define MAX_TOUCH     4
+
+typedef struct {
+  int active;
+  u32 finger_id;
+  float x, y;
+} TouchSlot;
+
+static TouchSlot touch_slots[MAX_TOUCH];
+
+static int touch_slot_find(u32 finger_id) {
+  for (int i = 0; i < MAX_TOUCH; i++)
+    if (touch_slots[i].active && touch_slots[i].finger_id == finger_id)
+      return i;
+  return -1;
+}
+
+static int touch_slot_alloc(void) {
+  for (int i = 0; i < MAX_TOUCH; i++)
+    if (!touch_slots[i].active)
+      return i;
+  return -1;
+}
+
+static void update_touch(void) {
+  HidTouchScreenState ts = { 0 };
+  if (!hidGetTouchScreenStates(&ts, 1))
+    return;
+
+  const float sx = (float)screen_width  / (float)TOUCH_PANEL_W;
+  const float sy = (float)screen_height / (float)TOUCH_PANEL_H;
+
+  int seen[MAX_TOUCH] = { 0 };
+  for (int i = 0; i < ts.count; i++) {
+    const HidTouchState *t = &ts.touches[i];
+    const float x = (float)t->x * sx;
+    const float y = (float)screen_height - (float)t->y * sy;
+
+    int s = touch_slot_find(t->finger_id);
+    if (s < 0) {
+      s = touch_slot_alloc();
+      if (s < 0) continue; // more fingers than slots: ignore the extras
+      touch_slots[s].active = 1;
+      touch_slots[s].finger_id = t->finger_id;
+      emit_touch_drag(TOUCH_BEGAN, s, x, y, x, y);
+    } else if (x != touch_slots[s].x || y != touch_slots[s].y) {
+      emit_touch_drag(TOUCH_MOVED, s, x, y, touch_slots[s].x, touch_slots[s].y);
+    }
+    touch_slots[s].x = x;
+    touch_slots[s].y = y;
+    seen[s] = 1;
+  }
+
+  for (int s = 0; s < MAX_TOUCH; s++)
+    if (touch_slots[s].active && !seen[s]) {
+      emit_touch_drag(TOUCH_ENDED, s, touch_slots[s].x, touch_slots[s].y,
+                      touch_slots[s].x, touch_slots[s].y);
+      touch_slots[s].active = 0;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +363,7 @@ int main(void) {
 
   padConfigureInput(8, HidNpadStyleSet_NpadStandard);
   padInitializeAny(&pad);
+  hidInitializeTouchScreen();
 
   u64 last_tick = armGetSystemTick();
   const u64 tick_freq = armGetSystemTickFreq();
@@ -300,6 +371,7 @@ int main(void) {
 
   while (appletMainLoop()) {
     update_input();
+    update_touch();
 
     const u64 now = armGetSystemTick();
     float dt = (float)(now - last_tick) / (float)tick_freq;
