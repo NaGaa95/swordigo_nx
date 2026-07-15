@@ -30,9 +30,17 @@ Final layout:
 
 Launch via a **game override** (hold R on an installed title) or a forwarder
 
-## Known Issue
+## Controls
 
-- The game over screen locks up the game, requiring you to restart the app.
+- Left stick / D-pad — move
+- B — jump and continue from the game-over screen
+- Y — attack
+- A — magic
+- X — use item
+- Minus — magic selection
+- Plus — pause/menu
+- ZL — back/escape
+- Touchscreen — shows the touch overlay again after controller input
 
 ## Build
 

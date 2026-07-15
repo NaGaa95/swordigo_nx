@@ -4,6 +4,8 @@
  * of the MIT license.  See the LICENSE file for details.
  */
 
+#include <switch.h>
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -74,6 +76,42 @@ static const char *obj_str(void *jstr) {
 static FakeID id_pool[MAX_IDS];
 static int id_count = 0;
 
+#define TEXT_INPUT_MAX 256
+static int text_input_pending = 0;
+static char text_input_initial[TEXT_INPUT_MAX];
+static JniTextChangedCallback text_input_changed = NULL;
+static JniTextFinishedCallback text_input_finished = NULL;
+
+void jni_configure_text_input(JniTextChangedCallback changed,
+                              JniTextFinishedCallback finished) {
+  text_input_changed = changed;
+  text_input_finished = finished;
+}
+
+void jni_update(void) {
+  if (!text_input_pending)
+    return;
+
+  text_input_pending = 0;
+
+  SwkbdConfig kbd;
+  Result rc = swkbdCreate(&kbd, 0);
+  char result[TEXT_INPUT_MAX] = { 0 };
+  if (R_SUCCEEDED(rc)) {
+    swkbdConfigMakePresetDefault(&kbd);
+    swkbdConfigSetInitialText(&kbd, text_input_initial);
+    swkbdConfigSetStringLenMax(&kbd, TEXT_INPUT_MAX - 1);
+    rc = swkbdShow(&kbd, result, sizeof(result));
+    swkbdClose(&kbd);
+  }
+
+  if (R_SUCCEEDED(rc) && text_input_changed)
+    text_input_changed(fake_env, NULL, jni_make_string(result));
+
+  if (text_input_finished)
+    text_input_finished(fake_env, NULL);
+}
+
 static FakeID *get_id(const char *name, const char *sig) {
   for (int i = 0; i < id_count; i++)
     if (!strcmp(id_pool[i].name, name) && !strcmp(id_pool[i].sig, sig))
@@ -114,6 +152,16 @@ static void call_void(const char *name, va_list va) {
   if (!strcmp(name, "stop"))       { music_stop();  return; }
   if (!strcmp(name, "setLooping")) { music_set_loop(va_arg(va, int)); return; }
   if (!strcmp(name, "setVolume"))  { music_set_volume((float)va_arg(va, double)); return; }
+  if (!strcmp(name, "startTextInput")) {
+    const char *initial = obj_str(va_arg(va, void *));
+    snprintf(text_input_initial, sizeof(text_input_initial), "%s", initial);
+    text_input_pending = 1;
+    return;
+  }
+  if (!strcmp(name, "stopTextInput")) {
+    text_input_pending = 0;
+    return;
+  }
   if (!strcmp(name, "reportAchievementProgress")) {
     // no trophy system on Switch homebrew; the args are (name, progress, locked)
     const char *ach = obj_str(va_arg(va, void *));
@@ -240,6 +288,9 @@ static void **vm_table_ptr = vm_table;
 void *fake_vm = &vm_table_ptr;
 
 void jni_init(void) {
+  id_count = 0;
+  text_input_pending = 0;
+  text_input_initial[0] = '\0';
   for (int i = 0; i < 233; i++)
     env_table[i] = (void *)j_unimplemented;
 

@@ -13,6 +13,8 @@
 
 #define _GNU_SOURCE
 
+#include <switch.h>
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -133,17 +135,39 @@ static int pthread_create_fake(pthread_t *thread, const void *attr_unused, void 
   return r;
 }
 
-static int pthread_mutex_init_fake(pthread_mutex_t **uid, const int *attr) {
+static pthread_mutex_t *allocate_mutex(int recursive) {
   pthread_mutex_t *m = calloc(1, sizeof(pthread_mutex_t));
   if (!m)
-    return -1;
-  const int recursive = (attr && *attr == 1);
-  *m = recursive ? (pthread_mutex_t)PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP
-                  : (pthread_mutex_t)PTHREAD_MUTEX_INITIALIZER;
-  if (pthread_mutex_init(m, NULL) != 0) {
-    free(m);
-    return -1;
+    return NULL;
+
+  pthread_mutexattr_t attr;
+  pthread_mutexattr_t *attr_ptr = NULL;
+  if (recursive) {
+    if (pthread_mutexattr_init(&attr) != 0) {
+      free(m);
+      return NULL;
+    }
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+    attr_ptr = &attr;
   }
+
+  const int rc = pthread_mutex_init(m, attr_ptr);
+  if (recursive)
+    pthread_mutexattr_destroy(&attr);
+  if (rc != 0) {
+    free(m);
+    return NULL;
+  }
+  return m;
+}
+
+static int pthread_mutex_init_fake(pthread_mutex_t **uid, const int *attr) {
+  if (!uid)
+    return -1;
+  const int recursive = attr && *attr == PTHREAD_MUTEX_RECURSIVE;
+  pthread_mutex_t *m = allocate_mutex(recursive);
+  if (!m)
+    return -1;
   *uid = m;
   return 0;
 }
@@ -151,11 +175,24 @@ static int pthread_mutex_init_fake(pthread_mutex_t **uid, const int *attr) {
 // bionic static initializers leave the storage zeroed (normal) or set to a
 // small sentinel (recursive); materialize a real mutex on first use
 static int ensure_mutex(pthread_mutex_t **uid) {
-  if (!*uid)
-    return pthread_mutex_init_fake(uid, NULL);
-  if ((uintptr_t)*uid == 0x4000) {
-    int attr = 1;
-    return pthread_mutex_init_fake(uid, &attr);
+  if (!uid)
+    return -1;
+
+  pthread_mutex_t *current = __atomic_load_n(uid, __ATOMIC_ACQUIRE);
+  const uintptr_t marker = (uintptr_t)current;
+  if (marker > 0x8000)
+    return 0;
+  if (marker != 0 && marker != 0x4000)
+    return -1;
+
+  pthread_mutex_t *m = allocate_mutex(marker == 0x4000);
+  if (!m)
+    return -1;
+  pthread_mutex_t *expected = current;
+  if (!__atomic_compare_exchange_n(uid, &expected, m, 0,
+                                   __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
+    pthread_mutex_destroy(m);
+    free(m);
   }
   return 0;
 }
@@ -180,8 +217,16 @@ static int pthread_mutex_unlock_fake(pthread_mutex_t **uid) {
 static int pthread_once_fake(volatile int *once_control, void (*init_routine)(void)) {
   if (!once_control || !init_routine)
     return -1;
-  if (__sync_lock_test_and_set(once_control, 1) == 0)
+
+  int expected = 0;
+  if (__atomic_compare_exchange_n(once_control, &expected, 1, 0,
+                                  __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
     init_routine();
+    __atomic_store_n(once_control, 2, __ATOMIC_RELEASE);
+  } else {
+    while (__atomic_load_n(once_control, __ATOMIC_ACQUIRE) != 2)
+      svcSleepThread(0);
+  }
   return 0;
 }
 
@@ -324,8 +369,11 @@ static int AAsset_openFileDescriptor_fake(void *asset, off_t *out_start, off_t *
 
 static ALCdevice *g_al_device = NULL;
 static ALCcontext *g_al_context = NULL;
+static int g_al_active = 0;
 
 void init_openal(void) {
+  if (g_al_active)
+    return;
   g_al_device = alcOpenDevice(NULL);
   if (!g_al_device) {
     debugPrintf("openal: alcOpenDevice failed\n");
@@ -333,29 +381,53 @@ void init_openal(void) {
   }
   const ALCint attr[] = { ALC_FREQUENCY, 48000, 0 };
   g_al_context = alcCreateContext(g_al_device, attr);
-  alcMakeContextCurrent(g_al_context);
+  if (!g_al_context) {
+    alcCloseDevice(g_al_device);
+    g_al_device = NULL;
+    return;
+  }
+  if (!alcMakeContextCurrent(g_al_context)) {
+    alcDestroyContext(g_al_context);
+    alcCloseDevice(g_al_device);
+    g_al_context = NULL;
+    g_al_device = NULL;
+    return;
+  }
+  g_al_active = 1;
   debugPrintf("openal: device=%p context=%p\n", g_al_device, g_al_context);
 }
 
 void deinit_openal(void) {
+  if (!g_al_active)
+    return;
   if (g_al_context) {
     alcMakeContextCurrent(NULL);
     alcDestroyContext(g_al_context);
-    g_al_context = NULL;
   }
   if (g_al_device) {
     alcCloseDevice(g_al_device);
-    g_al_device = NULL;
   }
+  // Keep the pointer values so late game destructors cannot free them twice.
+  g_al_active = 0;
 }
 
 static ALCdevice *alcOpenDevice_hook(const ALCchar *name) {
   (void)name;
-  return g_al_device;
+  return g_al_active ? g_al_device : NULL;
 }
 static ALCcontext *alcCreateContext_hook(ALCdevice *dev, const ALCint *attr) {
-  (void)dev; (void)attr;
-  return g_al_context;
+  (void)attr;
+  return g_al_active && dev == g_al_device ? g_al_context : NULL;
+}
+static ALCboolean alcCloseDevice_hook(ALCdevice *dev) {
+  if (dev == g_al_device)
+    return ALC_TRUE;
+  return alcCloseDevice(dev);
+}
+static void alcDestroyContext_hook(ALCcontext *ctx) {
+  if (ctx == g_al_context)
+    return;
+  alcDestroyContext(ctx);
 }
 // Apportable's openal-soft has device suspend/resume extensions native
 // openal-soft lacks; no-op them
@@ -627,9 +699,9 @@ DynLibFunction dynlib_functions[] = {
   { "alSourceStop", (uintptr_t)&alSourceStop },
   { "alSourcef", (uintptr_t)&alSourcef },
   { "alSourcei", (uintptr_t)&alSourcei },
-  { "alcCloseDevice", (uintptr_t)&alcCloseDevice },
+  { "alcCloseDevice", (uintptr_t)&alcCloseDevice_hook },
   { "alcCreateContext", (uintptr_t)&alcCreateContext_hook },
-  { "alcDestroyContext", (uintptr_t)&alcDestroyContext },
+  { "alcDestroyContext", (uintptr_t)&alcDestroyContext_hook },
   { "alcGetCurrentContext", (uintptr_t)&alcGetCurrentContext },
   { "alcMakeContextCurrent", (uintptr_t)&alcMakeContextCurrent },
   { "alcOpenDevice", (uintptr_t)&alcOpenDevice_hook },

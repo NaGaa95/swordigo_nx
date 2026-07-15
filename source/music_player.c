@@ -260,7 +260,8 @@ void music_play(void) {
 void music_pause(void) {
   if (!s_inited) return;
   pthread_mutex_lock(&s_lock);
-  s_want_pause = !s_want_pause;
+  // Java MediaPlayer.pause() is idempotent.
+  s_want_pause = 1;
   pthread_mutex_unlock(&s_lock);
 }
 
