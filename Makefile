@@ -37,6 +37,9 @@ LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*
 # GLES1 (libGLESv1_CM) for the fixed-function renderer, mesa/nouveau for EGL,
 # native openal-soft for sound, mpg123 to decode the .mp3 music. SDL2 is
 # openal-soft's audio backend on Switch.
+# Publish all EGL presentation paths, including guest import tables.
+LDFLAGS += -Wl,--wrap=eglSwapBuffers,--wrap=eglGetProcAddress,--wrap=__libnx_exit
+
 LIBS	:= -lGLESv1_CM -lEGL -lglapi -ldrm_nouveau \
 			-lopenal -lmpg123 -lSDL2 -lz \
 			-lnx -lm

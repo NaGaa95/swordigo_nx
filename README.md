@@ -68,3 +68,7 @@ If you enjoy my work and want to support me :
 Not affiliated with Touchfoo / Ville Mäkynen. "Swordigo" is the property of its
 owner. No assets or original program code are included; obtain the game
 legally. The wrapper source here is MIT licensed (see `LICENSE`).
+
+### SaltyNX telemetry
+
+FPS and render resolution are published to SaltyNX shared memory for compatible overlays. The port continues normally when SaltyNX is not running. This reports presentation timing and resolution; it does not change the game's frame cap.

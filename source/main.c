@@ -12,6 +12,7 @@
  * of the MIT license.  See the LICENSE file for details.
  */
 
+#include "saltynx.h"
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -443,6 +444,8 @@ static void update_touch(void) {
 // ---------------------------------------------------------------------------
 
 int main(void) {
+  saltynx_start();
+  atexit(saltynx_stop);
   cpu_boost(1); // full clocks through boot; dropped after a few frames
 
   check_syscalls();
